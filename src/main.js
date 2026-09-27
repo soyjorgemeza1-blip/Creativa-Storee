@@ -265,7 +265,7 @@ document.querySelector(".catalog-tools").insertAdjacentHTML(
 );
 document.querySelector(".top-actions").insertAdjacentHTML(
   "afterbegin",
-  '<button class="account-button" id="account-toggle" type="button">Mi cuenta</button>',
+  '<div class="account-control"><button class="account-button" id="account-toggle" type="button">Mi cuenta</button><span class="account-user-name" id="account-user-name" hidden></span></div>',
 );
 document.body.insertAdjacentHTML(
   "beforeend",
@@ -279,7 +279,27 @@ const customerModal = document.querySelector("#customer-modal");
 const customerPhone = document.querySelector("#customer-phone");
 const customerPassword = document.querySelector("#customer-password");
 const customerName = document.querySelector("#customer-name");
+const customerNameField = document.querySelector("#customer-name-field");
+customerNameField.firstChild.textContent = "Nombre y apellido";
+customerName.placeholder = "Nombre y apellido";
 let authMode = "login";
+function normalizeCustomerName(name) {
+  return String(name || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLocaleLowerCase("es");
+}
+function renderAccountName() {
+  const phone = sessionStorage.getItem("creativa-customer-phone");
+  const users = JSON.parse(localStorage.getItem("creativa-users") || "[]");
+  const name = users.find((user) => user.phone === phone)?.name || "";
+  const nameElement = document.querySelector("#account-user-name");
+  nameElement.textContent = name;
+  nameElement.hidden = !name;
+  nameElement.title = name;
+}
 function setAuthMode(mode) {
   authMode = mode;
   const register = mode === "register";
@@ -306,6 +326,7 @@ function closeCustomerLogin() {
 if (sessionStorage.getItem("creativa-customer-phone") && !hasActiveCustomerSession()) {
   clearCustomerSession();
 }
+renderAccountName();
 if (!hasActiveCustomerSession()) openCustomerLogin();
 document.querySelector("#account-toggle").addEventListener("click", openCustomerLogin);
 document.querySelector("#login-tab").addEventListener("click", () => setAuthMode("login"));
@@ -317,6 +338,7 @@ window.addEventListener("storage", (event) => {
   const phone = sessionStorage.getItem("creativa-customer-phone");
   if (!phone || event.key !== activeCustomerSessionKey(phone) || hasActiveCustomerSession()) return;
   clearCustomerSession();
+  renderAccountName();
   openCustomerLogin();
   showToast("Tu sesión se cerró porque iniciaste sesión en otra pestaña.");
 });
@@ -334,7 +356,16 @@ document.querySelector("#customer-login-form").addEventListener("submit", (event
       showToast("Ese teléfono ya tiene una cuenta.");
       return;
     }
-    users.push({ phone, password: customerPassword.value, name: customerName.value.trim() });
+    const name = customerName.value.trim().replace(/\s+/g, " ");
+    if (name.split(" ").length < 2) {
+      showToast("Escribe tu nombre y apellido.");
+      return;
+    }
+    if (users.some((item) => normalizeCustomerName(item.name) === normalizeCustomerName(name))) {
+      showToast("Ese nombre y apellido ya está registrado.");
+      return;
+    }
+    users.push({ phone, password: customerPassword.value, name });
     localStorage.setItem("creativa-users", JSON.stringify(users));
   } else if (!user || user.password !== customerPassword.value) {
     showToast("Teléfono o contraseña incorrectos.");
@@ -344,6 +375,7 @@ document.querySelector("#customer-login-form").addEventListener("submit", (event
   sessionStorage.setItem("creativa-customer-phone", phone);
   sessionStorage.setItem("creativa-customer-session-id", sessionId);
   localStorage.setItem(activeCustomerSessionKey(phone), JSON.stringify({ phone, id: sessionId }));
+  renderAccountName();
   closeCustomerLogin();
   showToast("Sesión iniciada correctamente.");
 });
