@@ -286,7 +286,29 @@ customerName.autocomplete = "given-name";
 customerName.placeholder = "Tu nombre";
 const customerLoginForm = document.querySelector("#customer-login-form");
 const customerSubmit = document.querySelector("#customer-submit");
+const customerPhoneField = customerPhone.closest("label");
+const customerPasswordField = customerPassword.closest("label");
+const customerAuthTabs = document.querySelector(".auth-tabs");
+const customerOtpField = document.createElement("label");
+customerOtpField.hidden = true;
+customerOtpField.textContent = "Código SMS";
+const customerOtp = document.createElement("input");
+customerOtp.type = "text";
+customerOtp.inputMode = "numeric";
+customerOtp.autocomplete = "one-time-code";
+customerOtp.maxLength = 8;
+customerOtp.required = true;
+customerOtp.placeholder = "Código de verificación";
+customerOtpField.append(customerOtp);
+customerLoginForm.insertBefore(customerOtpField, customerSubmit);
+const resendOtpButton = document.createElement("button");
+resendOtpButton.className = "customer-resend-code";
+resendOtpButton.type = "button";
+resendOtpButton.textContent = "Reenviar código";
+resendOtpButton.hidden = true;
+customerLoginForm.insertBefore(resendOtpButton, customerSubmit);
 let authMode = "login";
+let pendingPhoneVerification = null;
 function renderAccountName() {
   const name = getCustomerDisplayName(customerProfile);
   const nameElement = document.querySelector("#account-user-name");
@@ -312,8 +334,13 @@ function customerAuthError(error) {
   if (error?.code === "SESSION_REPLACED") {
     return "Esta cuenta ya inició sesión en otro dispositivo.";
   }
-  if (error?.code === "PHONE_CONFIRMATION_REQUIRED") {
-    return "Desactiva Enable phone confirmations en Supabase para usar el registro sin SMS.";
+  if (
+    error?.status === 429 ||
+    normalizedMessage.includes("too many") ||
+    normalizedMessage.includes("rate limit") ||
+    normalizedMessage.includes("security purposes")
+  ) {
+    return "Se alcanzó el límite temporal de códigos. Espera 60 segundos antes de intentarlo otra vez; si persiste, revisa los límites de Auth y la configuración de Twilio.";
   }
   if (normalizedMessage.includes("phone provider is disabled")) {
     return "Activa el proveedor Phone en Supabase Auth para registrar teléfonos.";
@@ -339,6 +366,21 @@ async function ensureAuthSchema() {
   const { data, error } = await supabase.rpc("auth_schema_ready");
   if (error) throw error;
   if (data !== true) throw new Error("SUPABASE_SCHEMA_NOT_READY");
+}
+function setPhoneVerificationMode(enabled) {
+  customerNameField.hidden = enabled || authMode !== "register";
+  customerSurnameField.hidden = enabled || authMode !== "register";
+  customerPhoneField.hidden = enabled;
+  customerPasswordField.hidden = enabled;
+  customerAuthTabs.hidden = enabled;
+  customerOtpField.hidden = !enabled;
+  customerOtp.required = enabled;
+  resendOtpButton.hidden = !enabled;
+  customerSubmit.textContent = enabled
+    ? "Verificar teléfono"
+    : authMode === "register"
+      ? "Crear cuenta →"
+      : "Entrar →";
 }
 async function loadCustomerProfile(userId) {
   const { data, error } = await supabase
@@ -441,6 +483,7 @@ async function restoreCustomerSession() {
   await setCustomerSession(data.session, sessionId);
 }
 function setAuthMode(mode) {
+  if (pendingPhoneVerification) return;
   authMode = mode;
   const register = mode === "register";
   document.querySelector("#login-tab").classList.toggle("active", !register);
@@ -453,9 +496,12 @@ function setAuthMode(mode) {
   customerSurname.required = register;
   customerSubmit.textContent = register ? "Crear cuenta →" : "Entrar →";
   customerPassword.autocomplete = register ? "new-password" : "current-password";
+  setPhoneVerificationMode(false);
 }
 function openCustomerLogin() {
+  pendingPhoneVerification = null;
   setAuthMode("login");
+  customerOtp.value = "";
   customerModal.classList.add("open");
   document.querySelector("#customer-overlay").classList.add("visible");
   customerPhone.value = "";
@@ -503,11 +549,31 @@ document.querySelector("#register-tab").addEventListener("click", () => setAuthM
 document.querySelector("#customer-overlay").addEventListener("click", () => {
   if (customerSession) closeCustomerLogin();
 });
+resendOtpButton.addEventListener("click", async () => {
+  if (!pendingPhoneVerification) return;
+  const { error } = await supabase.auth.resend({
+    type: "sms",
+    phone: pendingPhoneVerification,
+  });
+  showToast(error ? customerAuthError(error) : "Te enviamos otro código por SMS.");
+});
 customerLoginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   customerSubmit.disabled = true;
   try {
     await ensureAuthSchema();
+    if (pendingPhoneVerification) {
+      const { data, error } = await supabase.auth.verifyOtp({
+        phone: pendingPhoneVerification,
+        token: customerOtp.value.trim(),
+        type: "sms",
+      });
+      if (error) throw error;
+      pendingPhoneVerification = null;
+      setPhoneVerificationMode(false);
+      await claimAndRenderSession(data.session);
+      return;
+    }
     const rawPhone = customerPhone.value.trim();
     const digits = rawPhone.replace(/\D/g, "");
     const phone = rawPhone.startsWith("+")
@@ -531,9 +597,12 @@ customerLoginForm.addEventListener("submit", async (event) => {
       });
       if (error) throw error;
       if (!data.session) {
-        const confirmationError = new Error("PHONE_CONFIRMATION_REQUIRED");
-        confirmationError.code = "PHONE_CONFIRMATION_REQUIRED";
-        throw confirmationError;
+        pendingPhoneVerification = phone;
+        customerOtp.value = "";
+        setPhoneVerificationMode(true);
+        customerOtp.focus();
+        showToast("Te enviamos un código SMS para verificar tu teléfono.");
+        return;
       }
       await claimAndRenderSession(data.session);
     } else {
