@@ -84,12 +84,12 @@ let favorites = new Set(
 let reviews = JSON.parse(localStorage.getItem("creativa-reviews") || "{}");
 let discount = 0;
 let adminLoggedIn = sessionStorage.getItem("creativa-admin") === "true";
-const activeCustomerSessionKey = "creativa-active-customer-session";
+const activeCustomerSessionKey = (phone) => `creativa-active-customer-session:${phone}`;
 const app = document.querySelector("#app");
 
-function getActiveCustomerSession() {
+function getActiveCustomerSession(phone) {
   try {
-    return JSON.parse(localStorage.getItem(activeCustomerSessionKey) || "null");
+    return JSON.parse(localStorage.getItem(activeCustomerSessionKey(phone)) || "null");
   } catch {
     return null;
   }
@@ -98,7 +98,7 @@ function getActiveCustomerSession() {
 function hasActiveCustomerSession() {
   const phone = sessionStorage.getItem("creativa-customer-phone");
   const sessionId = sessionStorage.getItem("creativa-customer-session-id");
-  const activeSession = getActiveCustomerSession();
+  const activeSession = getActiveCustomerSession(phone);
   return Boolean(phone && sessionId && activeSession?.phone === phone && activeSession?.id === sessionId);
 }
 
@@ -314,8 +314,8 @@ document.querySelector("#customer-overlay").addEventListener("click", () => {
   if (sessionStorage.getItem("creativa-customer-phone")) closeCustomerLogin();
 });
 window.addEventListener("storage", (event) => {
-  if (event.key !== activeCustomerSessionKey) return;
-  if (!sessionStorage.getItem("creativa-customer-phone") || hasActiveCustomerSession()) return;
+  const phone = sessionStorage.getItem("creativa-customer-phone");
+  if (!phone || event.key !== activeCustomerSessionKey(phone) || hasActiveCustomerSession()) return;
   clearCustomerSession();
   openCustomerLogin();
   showToast("Tu sesión se cerró porque iniciaste sesión en otra pestaña.");
@@ -343,7 +343,7 @@ document.querySelector("#customer-login-form").addEventListener("submit", (event
   const sessionId = crypto.randomUUID();
   sessionStorage.setItem("creativa-customer-phone", phone);
   sessionStorage.setItem("creativa-customer-session-id", sessionId);
-  localStorage.setItem(activeCustomerSessionKey, JSON.stringify({ phone, id: sessionId }));
+  localStorage.setItem(activeCustomerSessionKey(phone), JSON.stringify({ phone, id: sessionId }));
   closeCustomerLogin();
   showToast("Sesión iniciada correctamente.");
 });
