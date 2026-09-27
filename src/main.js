@@ -1,4 +1,5 @@
 import "./style.css";
+import { supabase } from "./supabase.js";
 
 const defaultProducts = [
   {
@@ -84,27 +85,18 @@ let favorites = new Set(
 let reviews = JSON.parse(localStorage.getItem("creativa-reviews") || "{}");
 let discount = 0;
 let adminLoggedIn = sessionStorage.getItem("creativa-admin") === "true";
-const activeCustomerSessionKey = (phone) => `creativa-active-customer-session:${phone}`;
+const activeSessionStorageKey = "creativa-active-session-id";
+let customerSession = null;
+let customerProfile = null;
+let activeSessionId = null;
+let sessionMonitor = null;
 const app = document.querySelector("#app");
 
-function getActiveCustomerSession(phone) {
-  try {
-    return JSON.parse(localStorage.getItem(activeCustomerSessionKey(phone)) || "null");
-  } catch {
-    return null;
-  }
-}
-
-function hasActiveCustomerSession() {
-  const phone = sessionStorage.getItem("creativa-customer-phone");
-  const sessionId = sessionStorage.getItem("creativa-customer-session-id");
-  const activeSession = getActiveCustomerSession(phone);
-  return Boolean(phone && sessionId && activeSession?.phone === phone && activeSession?.id === sessionId);
-}
-
-function clearCustomerSession() {
-  sessionStorage.removeItem("creativa-customer-phone");
-  sessionStorage.removeItem("creativa-customer-session-id");
+function getCustomerDisplayName(user) {
+  return [user?.first_name || user?.name, user?.last_name || user?.surname]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
 }
 
 function getProductRating(product) {
@@ -175,11 +167,9 @@ function openProductDetails(product) {
   detail.querySelector(".detail-rating").textContent = `★ ${getProductRating(product)}`;
   detail.querySelector(".detail-label").textContent = product.label;
   detail.querySelector(".detail-description").textContent = `Un detalle especial de nuestra colección de ${product.category.toLowerCase()}, elegido para acompañar tus momentos favoritos.`;
-  const currentPhone = sessionStorage.getItem("creativa-customer-phone");
-  const currentUsers = JSON.parse(localStorage.getItem("creativa-users") || "[]");
-  const currentUser = currentUsers.find((user) => user.phone === currentPhone);
-    document.querySelector("#review-name").value = getCustomerDisplayName(currentUser) || currentPhone || "Cliente";
-    document.querySelector("#review-name").setAttribute("readonly", true);
+  document.querySelector("#review-name").value =
+    getCustomerDisplayName(customerProfile) || customerSession?.user?.phone || "Cliente";
+  document.querySelector("#review-name").setAttribute("readonly", true);
   renderReviews(product.id);
   detail.dataset.productId = product.id;
   detail.classList.add("open");
@@ -265,7 +255,7 @@ document.querySelector(".catalog-tools").insertAdjacentHTML(
 );
 document.querySelector(".top-actions").insertAdjacentHTML(
   "afterbegin",
-  '<div class="account-control"><button class="account-button" id="account-toggle" type="button">Mi cuenta</button><span class="account-user-name" id="account-user-name" hidden></span></div>',
+  '<div class="account-control"><button class="account-button" id="account-toggle" type="button">Mi cuenta</button><span class="account-user-name" id="account-user-name" hidden></span><button class="account-sign-out" id="customer-logout" type="button" hidden>Cerrar sesión</button></div>',
 );
 document.body.insertAdjacentHTML(
   "beforeend",
@@ -294,42 +284,215 @@ customerNameField.after(customerSurnameField);
 customerNameField.firstChild.textContent = "Nombre";
 customerName.autocomplete = "given-name";
 customerName.placeholder = "Tu nombre";
+const customerLoginForm = document.querySelector("#customer-login-form");
+const customerSubmit = document.querySelector("#customer-submit");
+const customerPhoneField = customerPhone.closest("label");
+const customerPasswordField = customerPassword.closest("label");
+const customerAuthTabs = document.querySelector(".auth-tabs");
+const customerOtpField = document.createElement("label");
+customerOtpField.hidden = true;
+customerOtpField.textContent = "Código SMS";
+const customerOtp = document.createElement("input");
+customerOtp.type = "text";
+customerOtp.inputMode = "numeric";
+customerOtp.autocomplete = "one-time-code";
+customerOtp.maxLength = 8;
+customerOtp.required = true;
+customerOtp.placeholder = "Código de verificación";
+customerOtpField.append(customerOtp);
+customerLoginForm.insertBefore(customerOtpField, customerSubmit);
+const resendOtpButton = document.createElement("button");
+resendOtpButton.className = "customer-resend-code";
+resendOtpButton.type = "button";
+resendOtpButton.textContent = "Reenviar código";
+resendOtpButton.hidden = true;
+customerLoginForm.insertBefore(resendOtpButton, customerSubmit);
 let authMode = "login";
-function getCustomerDisplayName(user) {
-  return [user?.name, user?.surname].filter(Boolean).join(" ").trim();
-}
-function normalizeCustomerName(name) {
-  return String(name || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .replace(/\s+/g, " ")
-    .toLocaleLowerCase("es");
-}
+let pendingPhoneVerification = null;
 function renderAccountName() {
-  const phone = sessionStorage.getItem("creativa-customer-phone");
-  const users = JSON.parse(localStorage.getItem("creativa-users") || "[]");
-  const name = getCustomerDisplayName(users.find((user) => user.phone === phone));
+  const name = getCustomerDisplayName(customerProfile);
   const nameElement = document.querySelector("#account-user-name");
   nameElement.textContent = name;
   nameElement.hidden = !name;
   nameElement.title = name;
+  document.querySelector("#customer-logout").hidden = !customerSession;
+}
+function phoneForSupabase(value) {
+  const trimmed = value.trim();
+  const digits = trimmed.replace(/\D/g, "");
+  if (trimmed.startsWith("+")) return `+${digits}`;
+  if (digits.length === 10) return `+52${digits}`;
+  if (digits.length === 12 && digits.startsWith("52")) return `+${digits}`;
+  return "";
+}
+function customerAuthError(error) {
+  const message = String(error?.message || "");
+  const normalizedMessage = message.toLowerCase();
+  if (error?.code === "23505" || normalizedMessage.includes("profiles_full_name_unique")) {
+    return "Ese nombre y apellido ya están registrados.";
+  }
+  if (error?.code === "SESSION_REPLACED") {
+    return "Esta cuenta ya inició sesión en otro dispositivo.";
+  }
+  if (normalizedMessage.includes("phone provider is disabled")) {
+    return "Activa el proveedor Phone en Supabase Auth para registrar teléfonos.";
+  }
+  if (
+    normalizedMessage.includes("auth_schema_ready") ||
+    normalizedMessage.includes("schema_not_ready") ||
+    normalizedMessage.includes("active_sessions") ||
+    normalizedMessage.includes("profiles") ||
+    normalizedMessage.includes("schema cache")
+  ) {
+    return "Falta ejecutar supabase/schema.sql en el SQL Editor de Supabase.";
+  }
+  if (normalizedMessage.includes("database error saving new user")) {
+    return "No se pudo crear la cuenta. El nombre completo puede estar ocupado.";
+  }
+  if (normalizedMessage.includes("user already registered")) {
+    return "Ese teléfono ya tiene una cuenta.";
+  }
+  return message || "No se pudo completar la operación. Inténtalo de nuevo.";
+}
+async function ensureAuthSchema() {
+  const { data, error } = await supabase.rpc("auth_schema_ready");
+  if (error) throw error;
+  if (data !== true) throw new Error("SUPABASE_SCHEMA_NOT_READY");
+}
+function setPhoneVerificationMode(enabled) {
+  customerNameField.hidden = enabled || authMode !== "register";
+  customerSurnameField.hidden = enabled || authMode !== "register";
+  customerPhoneField.hidden = enabled;
+  customerPasswordField.hidden = enabled;
+  customerAuthTabs.hidden = enabled;
+  customerOtpField.hidden = !enabled;
+  customerOtp.required = enabled;
+  resendOtpButton.hidden = !enabled;
+  customerSubmit.textContent = enabled
+    ? "Verificar teléfono"
+    : authMode === "register"
+      ? "Crear cuenta →"
+      : "Entrar →";
+}
+async function loadCustomerProfile(userId) {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id, phone, first_name, last_name")
+    .eq("id", userId)
+    .single();
+  if (error) throw error;
+  return data;
+}
+function stopSessionMonitor() {
+  if (sessionMonitor) window.clearInterval(sessionMonitor);
+  sessionMonitor = null;
+}
+function startSessionMonitor() {
+  stopSessionMonitor();
+  sessionMonitor = window.setInterval(async () => {
+    if (!customerSession || !activeSessionId) return;
+    const { data, error } = await supabase
+      .from("active_sessions")
+      .select("session_id")
+      .eq("user_id", customerSession.user.id)
+      .maybeSingle();
+    if (!error && data?.session_id !== activeSessionId) await expireCustomerSession();
+  }, 10000);
+}
+async function setCustomerSession(session, sessionId) {
+  const { data: activeSession, error: sessionError } = await supabase
+    .from("active_sessions")
+    .select("session_id")
+    .eq("user_id", session.user.id)
+    .maybeSingle();
+  if (sessionError) throw sessionError;
+  if (activeSession?.session_id !== sessionId) {
+    const error = new Error("SESSION_REPLACED");
+    error.code = "SESSION_REPLACED";
+    throw error;
+  }
+  customerProfile = await loadCustomerProfile(session.user.id);
+  customerSession = session;
+  activeSessionId = sessionId;
+  sessionStorage.setItem(activeSessionStorageKey, sessionId);
+  renderAccountName();
+  closeCustomerLogin();
+  startSessionMonitor();
+}
+async function claimCustomerSession(session) {
+  const sessionId = crypto.randomUUID();
+  const { error } = await supabase.from("active_sessions").upsert(
+    {
+      user_id: session.user.id,
+      session_id: sessionId,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id" },
+  );
+  if (error) throw error;
+  await setCustomerSession(session, sessionId);
+}
+async function expireCustomerSession() {
+  const previousSession = customerSession;
+  const previousSessionId = activeSessionId;
+  stopSessionMonitor();
+  if (previousSession && previousSessionId) {
+    await supabase
+      .from("active_sessions")
+      .delete()
+      .eq("user_id", previousSession.user.id)
+      .eq("session_id", previousSessionId);
+  }
+  await supabase.auth.signOut();
+  customerSession = null;
+  customerProfile = null;
+  activeSessionId = null;
+  sessionStorage.removeItem(activeSessionStorageKey);
+  renderAccountName();
+  openCustomerLogin();
+  showToast("Tu sesión se cerró porque abriste esta cuenta en otro dispositivo.");
+}
+async function restoreCustomerSession() {
+  const { data, error } = await supabase.auth.getSession();
+  if (error) throw error;
+  if (!data.session) {
+    try {
+      await ensureAuthSchema();
+    } catch (schemaError) {
+      openCustomerLogin();
+      showToast(customerAuthError(schemaError));
+      return;
+    }
+    openCustomerLogin();
+    return;
+  }
+  const sessionId = sessionStorage.getItem(activeSessionStorageKey);
+  if (!sessionId) {
+    await supabase.auth.signOut();
+    openCustomerLogin();
+    return;
+  }
+  await setCustomerSession(data.session, sessionId);
 }
 function setAuthMode(mode) {
+  if (pendingPhoneVerification) return;
   authMode = mode;
   const register = mode === "register";
   document.querySelector("#login-tab").classList.toggle("active", !register);
   document.querySelector("#register-tab").classList.toggle("active", register);
   document.querySelector("#customer-title").textContent = register ? "Crea tu cuenta" : "Inicia sesión";
   document.querySelector("#customer-description").textContent = register ? "Regístrate para guardar tus favoritos y pedidos." : "Entra para guardar tus favoritos y pedidos.";
-  document.querySelector("#customer-name-field").hidden = !register;
+  customerNameField.hidden = !register;
   customerSurnameField.hidden = !register;
-  document.querySelector("#customer-name").required = register;
+  customerName.required = register;
   customerSurname.required = register;
-  document.querySelector("#customer-submit").firstChild.textContent = register ? "Crear cuenta " : "Entrar ";
   customerPassword.autocomplete = register ? "new-password" : "current-password";
+  setPhoneVerificationMode(false);
 }
 function openCustomerLogin() {
+  pendingPhoneVerification = null;
+  setAuthMode("login");
+  customerOtp.value = "";
   customerModal.classList.add("open");
   document.querySelector("#customer-overlay").classList.add("visible");
   customerPhone.value = "";
@@ -342,63 +505,118 @@ function closeCustomerLogin() {
   customerModal.classList.remove("open");
   document.querySelector("#customer-overlay").classList.remove("visible");
 }
-if (sessionStorage.getItem("creativa-customer-phone") && !hasActiveCustomerSession()) {
-  clearCustomerSession();
+async function claimAndRenderSession(session) {
+  await claimCustomerSession(session);
+  showToast("Sesión iniciada correctamente.");
 }
-renderAccountName();
-if (!hasActiveCustomerSession()) openCustomerLogin();
-document.querySelector("#account-toggle").addEventListener("click", openCustomerLogin);
+document.querySelector("#account-toggle").addEventListener("click", () => {
+  if (customerSession) {
+    showToast(`Sesión activa: ${getCustomerDisplayName(customerProfile)}.`);
+    return;
+  }
+  openCustomerLogin();
+});
+document.querySelector("#customer-logout").addEventListener("click", async () => {
+  const previousSession = customerSession;
+  const previousSessionId = activeSessionId;
+  stopSessionMonitor();
+  if (previousSession && previousSessionId) {
+    await supabase
+      .from("active_sessions")
+      .delete()
+      .eq("user_id", previousSession.user.id)
+      .eq("session_id", previousSessionId);
+  }
+  await supabase.auth.signOut();
+  customerSession = null;
+  customerProfile = null;
+  activeSessionId = null;
+  sessionStorage.removeItem(activeSessionStorageKey);
+  renderAccountName();
+  openCustomerLogin();
+});
 document.querySelector("#login-tab").addEventListener("click", () => setAuthMode("login"));
 document.querySelector("#register-tab").addEventListener("click", () => setAuthMode("register"));
 document.querySelector("#customer-overlay").addEventListener("click", () => {
-  if (sessionStorage.getItem("creativa-customer-phone")) closeCustomerLogin();
+  if (customerSession) closeCustomerLogin();
 });
-window.addEventListener("storage", (event) => {
-  const phone = sessionStorage.getItem("creativa-customer-phone");
-  if (!phone || event.key !== activeCustomerSessionKey(phone) || hasActiveCustomerSession()) return;
-  clearCustomerSession();
+resendOtpButton.addEventListener("click", async () => {
+  if (!pendingPhoneVerification) return;
+  const { error } = await supabase.auth.resend({ type: "sms", phone: pendingPhoneVerification });
+  showToast(error ? customerAuthError(error) : "Te enviamos otro código por SMS.");
+});
+customerLoginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  customerSubmit.disabled = true;
+  try {
+    await ensureAuthSchema();
+    if (pendingPhoneVerification) {
+      const { data, error } = await supabase.auth.verifyOtp({
+        phone: pendingPhoneVerification,
+        token: customerOtp.value.trim(),
+        type: "sms",
+      });
+      if (error) throw error;
+      pendingPhoneVerification = null;
+      setPhoneVerificationMode(false);
+      await claimAndRenderSession(data.session);
+      return;
+    }
+    const rawPhone = customerPhone.value.trim();
+    const digits = rawPhone.replace(/\D/g, "");
+    const phone = rawPhone.startsWith("+")
+      ? `+${digits}`
+      : digits.length === 10
+        ? `+52${digits}`
+        : digits.length === 12 && digits.startsWith("52")
+          ? `+${digits}`
+          : "";
+    if (!phone) {
+      showToast("Escribe un número de México con 10 dígitos o en formato +E.164.");
+      return;
+    }
+    if (authMode === "register") {
+      const firstName = customerName.value.trim().replace(/\s+/g, " ");
+      const lastName = customerSurname.value.trim().replace(/\s+/g, " ");
+      const { data, error } = await supabase.auth.signUp({
+        phone,
+        password: customerPassword.value,
+        options: { data: { first_name: firstName, last_name: lastName } },
+      });
+      if (error) throw error;
+      if (!data.session) {
+        pendingPhoneVerification = phone;
+        customerOtp.value = "";
+        setPhoneVerificationMode(true);
+        customerOtp.focus();
+        showToast("Te enviamos un código SMS para verificar tu teléfono.");
+        return;
+      }
+      await claimAndRenderSession(data.session);
+    } else {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        phone,
+        password: customerPassword.value,
+      });
+      if (error) throw error;
+      await claimAndRenderSession(data.session);
+    }
+  } catch (error) {
+    await supabase.auth.signOut();
+    showToast(customerAuthError(error));
+  } finally {
+    customerSubmit.disabled = false;
+  }
+});
+void restoreCustomerSession().catch(async (error) => {
+  await supabase.auth.signOut();
+  customerSession = null;
+  customerProfile = null;
+  activeSessionId = null;
+  sessionStorage.removeItem(activeSessionStorageKey);
   renderAccountName();
   openCustomerLogin();
-  showToast("Tu sesión se cerró porque iniciaste sesión en otra pestaña.");
-});
-document.querySelector("#customer-login-form").addEventListener("submit", (event) => {
-  event.preventDefault();
-  const phone = customerPhone.value.replace(/\D/g, "");
-  if (phone.length < 10) {
-    showToast("Escribe un número de teléfono válido.");
-    return;
-  }
-  const users = JSON.parse(localStorage.getItem("creativa-users") || "[]");
-  const user = users.find((item) => item.phone === phone);
-  if (authMode === "register") {
-    if (user) {
-      showToast("Ese teléfono ya tiene una cuenta.");
-      return;
-    }
-    const name = customerName.value.trim().replace(/\s+/g, " ");
-    const surname = customerSurname.value.trim().replace(/\s+/g, " ");
-    if (!name || !surname) {
-      showToast("Completa tu nombre y apellido.");
-      return;
-    }
-    const fullName = `${name} ${surname}`;
-    if (users.some((item) => normalizeCustomerName(getCustomerDisplayName(item)) === normalizeCustomerName(fullName))) {
-      showToast("Ese nombre y apellido ya está registrado.");
-      return;
-    }
-    users.push({ phone, password: customerPassword.value, name, surname });
-    localStorage.setItem("creativa-users", JSON.stringify(users));
-  } else if (!user || user.password !== customerPassword.value) {
-    showToast("Teléfono o contraseña incorrectos.");
-    return;
-  }
-  const sessionId = crypto.randomUUID();
-  sessionStorage.setItem("creativa-customer-phone", phone);
-  sessionStorage.setItem("creativa-customer-session-id", sessionId);
-  localStorage.setItem(activeCustomerSessionKey(phone), JSON.stringify({ phone, id: sessionId }));
-  renderAccountName();
-  closeCustomerLogin();
-  showToast("Sesión iniciada correctamente.");
+  showToast(customerAuthError(error));
 });
 updateCart();
 document.querySelector(".location").innerHTML =
@@ -538,11 +756,9 @@ document.querySelector("#detail-add").addEventListener("click", () => {
 document.querySelector("#review-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const productId = document.querySelector("#product-detail").dataset.productId;
-  const currentPhone = sessionStorage.getItem("creativa-customer-phone");
-  const currentUsers = JSON.parse(localStorage.getItem("creativa-users") || "[]");
-  const currentUser = currentUsers.find((user) => user.phone === currentPhone);
+  const currentPhone = customerSession?.user?.phone;
   const review = {
-    name: getCustomerDisplayName(currentUser) || currentPhone || "Cliente",
+    name: getCustomerDisplayName(customerProfile) || currentPhone || "Cliente",
     rating: Number(document.querySelector("#review-rating").value),
     text: document.querySelector("#review-text").value.trim(),
   };

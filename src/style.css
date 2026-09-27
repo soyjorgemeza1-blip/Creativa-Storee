@@ -144,6 +144,8 @@ a {
 .account-button { border: 1px solid var(--line); border-radius: 18px; padding: 9px 13px; background: #fff; color: var(--ink); font-size: 11px; font-weight: 600; }
 .account-control { display: flex; min-width: 0; flex-direction: column; align-items: center; gap: 3px; }
 .account-user-name { max-width: 120px; overflow: hidden; color: #8e6472; font-size: 9px; line-height: 1.1; text-overflow: ellipsis; white-space: nowrap; }
+.account-sign-out, .customer-resend-code { border: 0; padding: 0; background: transparent; color: var(--hot); font-size: 9px; text-decoration: underline; }
+.customer-resend-code { padding: 4px; font-size: 11px; }
 .admin-button { display: none; }
 .customer-overlay { position: fixed; z-index: 60; inset: 0; background: rgba(46, 18, 31, .4); opacity: 0; pointer-events: none; transition: opacity .2s; }
 .customer-overlay.visible, .customer-modal.open + .customer-overlay { opacity: 1; pointer-events: auto; }
