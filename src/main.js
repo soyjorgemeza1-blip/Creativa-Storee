@@ -178,7 +178,7 @@ function openProductDetails(product) {
   const currentPhone = sessionStorage.getItem("creativa-customer-phone");
   const currentUsers = JSON.parse(localStorage.getItem("creativa-users") || "[]");
   const currentUser = currentUsers.find((user) => user.phone === currentPhone);
-    document.querySelector("#review-name").value = currentUser?.name || currentPhone || "Cliente";
+    document.querySelector("#review-name").value = getCustomerDisplayName(currentUser) || currentPhone || "Cliente";
     document.querySelector("#review-name").setAttribute("readonly", true);
   renderReviews(product.id);
   detail.dataset.productId = product.id;
@@ -280,9 +280,24 @@ const customerPhone = document.querySelector("#customer-phone");
 const customerPassword = document.querySelector("#customer-password");
 const customerName = document.querySelector("#customer-name");
 const customerNameField = document.querySelector("#customer-name-field");
-customerNameField.firstChild.textContent = "Nombre y apellido";
-customerName.placeholder = "Nombre y apellido";
+const customerSurnameField = document.createElement("label");
+customerSurnameField.id = "customer-surname-field";
+customerSurnameField.hidden = true;
+customerSurnameField.append("Apellido");
+const customerSurname = document.createElement("input");
+customerSurname.id = "customer-surname";
+customerSurname.type = "text";
+customerSurname.autocomplete = "family-name";
+customerSurname.placeholder = "Tu apellido";
+customerSurnameField.append(customerSurname);
+customerNameField.after(customerSurnameField);
+customerNameField.firstChild.textContent = "Nombre";
+customerName.autocomplete = "given-name";
+customerName.placeholder = "Tu nombre";
 let authMode = "login";
+function getCustomerDisplayName(user) {
+  return [user?.name, user?.surname].filter(Boolean).join(" ").trim();
+}
 function normalizeCustomerName(name) {
   return String(name || "")
     .normalize("NFD")
@@ -294,7 +309,7 @@ function normalizeCustomerName(name) {
 function renderAccountName() {
   const phone = sessionStorage.getItem("creativa-customer-phone");
   const users = JSON.parse(localStorage.getItem("creativa-users") || "[]");
-  const name = users.find((user) => user.phone === phone)?.name || "";
+  const name = getCustomerDisplayName(users.find((user) => user.phone === phone));
   const nameElement = document.querySelector("#account-user-name");
   nameElement.textContent = name;
   nameElement.hidden = !name;
@@ -308,7 +323,9 @@ function setAuthMode(mode) {
   document.querySelector("#customer-title").textContent = register ? "Crea tu cuenta" : "Inicia sesión";
   document.querySelector("#customer-description").textContent = register ? "Regístrate para guardar tus favoritos y pedidos." : "Entra para guardar tus favoritos y pedidos.";
   document.querySelector("#customer-name-field").hidden = !register;
+  customerSurnameField.hidden = !register;
   document.querySelector("#customer-name").required = register;
+  customerSurname.required = register;
   document.querySelector("#customer-submit").firstChild.textContent = register ? "Crear cuenta " : "Entrar ";
   customerPassword.autocomplete = register ? "new-password" : "current-password";
 }
@@ -317,6 +334,8 @@ function openCustomerLogin() {
   document.querySelector("#customer-overlay").classList.add("visible");
   customerPhone.value = "";
   customerPassword.value = "";
+  customerName.value = "";
+  customerSurname.value = "";
   customerPhone.focus();
 }
 function closeCustomerLogin() {
@@ -357,15 +376,17 @@ document.querySelector("#customer-login-form").addEventListener("submit", (event
       return;
     }
     const name = customerName.value.trim().replace(/\s+/g, " ");
-    if (name.split(" ").length < 2) {
-      showToast("Escribe tu nombre y apellido.");
+    const surname = customerSurname.value.trim().replace(/\s+/g, " ");
+    if (!name || !surname) {
+      showToast("Completa tu nombre y apellido.");
       return;
     }
-    if (users.some((item) => normalizeCustomerName(item.name) === normalizeCustomerName(name))) {
+    const fullName = `${name} ${surname}`;
+    if (users.some((item) => normalizeCustomerName(getCustomerDisplayName(item)) === normalizeCustomerName(fullName))) {
       showToast("Ese nombre y apellido ya está registrado.");
       return;
     }
-    users.push({ phone, password: customerPassword.value, name });
+    users.push({ phone, password: customerPassword.value, name, surname });
     localStorage.setItem("creativa-users", JSON.stringify(users));
   } else if (!user || user.password !== customerPassword.value) {
     showToast("Teléfono o contraseña incorrectos.");
@@ -521,7 +542,7 @@ document.querySelector("#review-form").addEventListener("submit", (event) => {
   const currentUsers = JSON.parse(localStorage.getItem("creativa-users") || "[]");
   const currentUser = currentUsers.find((user) => user.phone === currentPhone);
   const review = {
-    name: currentUser?.name || currentPhone || "Cliente",
+    name: getCustomerDisplayName(currentUser) || currentPhone || "Cliente",
     rating: Number(document.querySelector("#review-rating").value),
     text: document.querySelector("#review-text").value.trim(),
   };
