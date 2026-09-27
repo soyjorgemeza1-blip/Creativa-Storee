@@ -287,11 +287,23 @@ customerName.placeholder = "Tu nombre";
 const customerLoginForm = document.querySelector("#customer-login-form");
 const customerSubmit = document.querySelector("#customer-submit");
 const customerPhoneField = customerPhone.closest("label");
+customerPhoneField.firstChild.textContent = "Teléfono de contacto";
+customerPhoneField.hidden = true;
+const customerEmailField = document.createElement("label");
+customerEmailField.textContent = "Correo electrónico";
+const customerEmail = document.createElement("input");
+customerEmail.id = "customer-email";
+customerEmail.type = "email";
+customerEmail.autocomplete = "email";
+customerEmail.required = true;
+customerEmail.placeholder = "tu@correo.com";
+customerEmailField.append(customerEmail);
+customerPhoneField.before(customerEmailField);
 const customerPasswordField = customerPassword.closest("label");
 const customerAuthTabs = document.querySelector(".auth-tabs");
 const customerOtpField = document.createElement("label");
 customerOtpField.hidden = true;
-customerOtpField.textContent = "Código SMS";
+customerOtpField.textContent = "Código de correo";
 const customerOtp = document.createElement("input");
 customerOtp.type = "text";
 customerOtp.inputMode = "numeric";
@@ -308,7 +320,7 @@ resendOtpButton.textContent = "Reenviar código";
 resendOtpButton.hidden = true;
 customerLoginForm.insertBefore(resendOtpButton, customerSubmit);
 let authMode = "login";
-let pendingPhoneVerification = null;
+let pendingEmailVerification = null;
 function renderAccountName() {
   const name = getCustomerDisplayName(customerProfile);
   const nameElement = document.querySelector("#account-user-name");
@@ -325,9 +337,15 @@ function phoneForSupabase(value) {
   if (digits.length === 12 && digits.startsWith("52")) return `+${digits}`;
   return "";
 }
+function emailForSupabase(value) {
+  return value.trim().toLowerCase();
+}
 function customerAuthError(error) {
   const message = String(error?.message || "");
   const normalizedMessage = message.toLowerCase();
+  if (normalizedMessage.includes("profiles_phone_key")) {
+    return "Ese teléfono ya está asociado a otra cuenta.";
+  }
   if (error?.code === "23505" || normalizedMessage.includes("profiles_full_name_unique")) {
     return "Ese nombre y apellido ya están registrados.";
   }
@@ -340,10 +358,13 @@ function customerAuthError(error) {
     normalizedMessage.includes("rate limit") ||
     normalizedMessage.includes("security purposes")
   ) {
-    return "Se alcanzó el límite temporal de códigos. Espera 60 segundos antes de intentarlo otra vez; si persiste, revisa los límites de Auth y la configuración de Twilio.";
+    return "Se alcanzó el límite temporal de códigos por correo. Espera 60 segundos antes de intentarlo otra vez; si persiste, revisa los límites de Auth y SMTP.";
   }
-  if (normalizedMessage.includes("phone provider is disabled")) {
-    return "Activa el proveedor Phone en Supabase Auth para registrar teléfonos.";
+  if (normalizedMessage.includes("email provider is disabled")) {
+    return "Activa el proveedor Email en Supabase Auth.";
+  }
+  if (normalizedMessage.includes("email not confirmed")) {
+    return "Confirma tu correo con el código que enviamos antes de iniciar sesión.";
   }
   if (
     normalizedMessage.includes("auth_schema_ready") ||
@@ -358,7 +379,7 @@ function customerAuthError(error) {
     return "No se pudo crear la cuenta. El nombre completo puede estar ocupado.";
   }
   if (normalizedMessage.includes("user already registered")) {
-    return "Ese teléfono ya tiene una cuenta.";
+    return "Ese correo ya tiene una cuenta.";
   }
   return message || "No se pudo completar la operación. Inténtalo de nuevo.";
 }
@@ -367,9 +388,10 @@ async function ensureAuthSchema() {
   if (error) throw error;
   if (data !== true) throw new Error("SUPABASE_SCHEMA_NOT_READY");
 }
-function setPhoneVerificationMode(enabled) {
+function setEmailVerificationMode(enabled) {
   customerNameField.hidden = enabled || authMode !== "register";
   customerSurnameField.hidden = enabled || authMode !== "register";
+  customerEmailField.hidden = enabled;
   customerPhoneField.hidden = enabled;
   customerPasswordField.hidden = enabled;
   customerAuthTabs.hidden = enabled;
@@ -377,7 +399,7 @@ function setPhoneVerificationMode(enabled) {
   customerOtp.required = enabled;
   resendOtpButton.hidden = !enabled;
   customerSubmit.textContent = enabled
-    ? "Verificar teléfono"
+    ? "Verificar correo"
     : authMode === "register"
       ? "Crear cuenta →"
       : "Entrar →";
@@ -483,7 +505,7 @@ async function restoreCustomerSession() {
   await setCustomerSession(data.session, sessionId);
 }
 function setAuthMode(mode) {
-  if (pendingPhoneVerification) return;
+  if (pendingEmailVerification) return;
   authMode = mode;
   const register = mode === "register";
   document.querySelector("#login-tab").classList.toggle("active", !register);
@@ -492,23 +514,27 @@ function setAuthMode(mode) {
   document.querySelector("#customer-description").textContent = register ? "Regístrate para guardar tus favoritos y pedidos." : "Entra para guardar tus favoritos y pedidos.";
   customerNameField.hidden = !register;
   customerSurnameField.hidden = !register;
+  customerEmailField.hidden = false;
+  customerPhoneField.hidden = !register;
   customerName.required = register;
   customerSurname.required = register;
+  customerPhone.required = register;
   customerSubmit.textContent = register ? "Crear cuenta →" : "Entrar →";
   customerPassword.autocomplete = register ? "new-password" : "current-password";
-  setPhoneVerificationMode(false);
+  setEmailVerificationMode(false);
 }
 function openCustomerLogin() {
-  pendingPhoneVerification = null;
+  pendingEmailVerification = null;
   setAuthMode("login");
   customerOtp.value = "";
   customerModal.classList.add("open");
   document.querySelector("#customer-overlay").classList.add("visible");
   customerPhone.value = "";
+  customerEmail.value = "";
   customerPassword.value = "";
   customerName.value = "";
   customerSurname.value = "";
-  customerPhone.focus();
+  customerEmail.focus();
 }
 function closeCustomerLogin() {
   customerModal.classList.remove("open");
@@ -550,64 +576,61 @@ document.querySelector("#customer-overlay").addEventListener("click", () => {
   if (customerSession) closeCustomerLogin();
 });
 resendOtpButton.addEventListener("click", async () => {
-  if (!pendingPhoneVerification) return;
+  if (!pendingEmailVerification) return;
   const { error } = await supabase.auth.resend({
-    type: "sms",
-    phone: pendingPhoneVerification,
+    type: "signup",
+    email: pendingEmailVerification,
   });
-  showToast(error ? customerAuthError(error) : "Te enviamos otro código por SMS.");
+  showToast(error ? customerAuthError(error) : "Te enviamos otro código por correo.");
 });
 customerLoginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   customerSubmit.disabled = true;
   try {
     await ensureAuthSchema();
-    if (pendingPhoneVerification) {
+    if (pendingEmailVerification) {
       const { data, error } = await supabase.auth.verifyOtp({
-        phone: pendingPhoneVerification,
+        email: pendingEmailVerification,
         token: customerOtp.value.trim(),
-        type: "sms",
+        type: "signup",
       });
       if (error) throw error;
-      pendingPhoneVerification = null;
-      setPhoneVerificationMode(false);
+      pendingEmailVerification = null;
+      setEmailVerificationMode(false);
       await claimAndRenderSession(data.session);
       return;
     }
-    const rawPhone = customerPhone.value.trim();
-    const digits = rawPhone.replace(/\D/g, "");
-    const phone = rawPhone.startsWith("+")
-      ? `+${digits}`
-      : digits.length === 10
-        ? `+52${digits}`
-        : digits.length === 12 && digits.startsWith("52")
-          ? `+${digits}`
-          : "";
-    if (!phone) {
-      showToast("Escribe un número de México con 10 dígitos o en formato +E.164.");
+    const email = emailForSupabase(customerEmail.value);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      showToast("Escribe un correo electrónico válido.");
       return;
     }
     if (authMode === "register") {
       const firstName = customerName.value.trim().replace(/\s+/g, " ");
       const lastName = customerSurname.value.trim().replace(/\s+/g, " ");
+      const phone = phoneForSupabase(customerPhone.value);
+      if (!phone) {
+        showToast("Escribe un número de México con 10 dígitos o en formato +E.164.");
+        return;
+      }
       const { data, error } = await supabase.auth.signUp({
-        phone,
+        email,
         password: customerPassword.value,
-        options: { data: { first_name: firstName, last_name: lastName } },
+        options: { data: { first_name: firstName, last_name: lastName, phone } },
       });
       if (error) throw error;
       if (!data.session) {
-        pendingPhoneVerification = phone;
+        pendingEmailVerification = email;
         customerOtp.value = "";
-        setPhoneVerificationMode(true);
+        setEmailVerificationMode(true);
         customerOtp.focus();
-        showToast("Te enviamos un código SMS para verificar tu teléfono.");
+        showToast("Te enviamos un código de verificación por correo.");
         return;
       }
       await claimAndRenderSession(data.session);
     } else {
       const { data, error } = await supabase.auth.signInWithPassword({
-        phone,
+        email,
         password: customerPassword.value,
       });
       if (error) throw error;

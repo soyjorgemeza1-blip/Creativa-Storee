@@ -28,7 +28,7 @@ begin
   insert into public.profiles (id, phone, first_name, last_name)
   values (
     new.id,
-    new.phone,
+    coalesce(new.raw_user_meta_data ->> 'phone', new.phone),
     btrim(regexp_replace(coalesce(new.raw_user_meta_data ->> 'first_name', ''), '[[:space:]]+', ' ', 'g')),
     btrim(regexp_replace(coalesce(new.raw_user_meta_data ->> 'last_name', ''), '[[:space:]]+', ' ', 'g'))
   );
