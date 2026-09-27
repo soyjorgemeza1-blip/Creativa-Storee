@@ -301,26 +301,7 @@ customerEmailField.append(customerEmail);
 customerPhoneField.before(customerEmailField);
 const customerPasswordField = customerPassword.closest("label");
 const customerAuthTabs = document.querySelector(".auth-tabs");
-const customerOtpField = document.createElement("label");
-customerOtpField.hidden = true;
-customerOtpField.textContent = "Código de correo";
-const customerOtp = document.createElement("input");
-customerOtp.type = "text";
-customerOtp.inputMode = "numeric";
-customerOtp.autocomplete = "one-time-code";
-customerOtp.maxLength = 8;
-customerOtp.required = true;
-customerOtp.placeholder = "Código de verificación";
-customerOtpField.append(customerOtp);
-customerLoginForm.insertBefore(customerOtpField, customerSubmit);
-const resendOtpButton = document.createElement("button");
-resendOtpButton.className = "customer-resend-code";
-resendOtpButton.type = "button";
-resendOtpButton.textContent = "Reenviar código";
-resendOtpButton.hidden = true;
-customerLoginForm.insertBefore(resendOtpButton, customerSubmit);
 let authMode = "login";
-let pendingEmailVerification = null;
 function renderAccountName() {
   const name = getCustomerDisplayName(customerProfile);
   const nameElement = document.querySelector("#account-user-name");
@@ -358,13 +339,13 @@ function customerAuthError(error) {
     normalizedMessage.includes("rate limit") ||
     normalizedMessage.includes("security purposes")
   ) {
-    return "Se alcanzó el límite temporal de códigos por correo. Espera 60 segundos antes de intentarlo otra vez; si persiste, revisa los límites de Auth y SMTP.";
+    return "Se alcanzó el límite temporal de correos. Espera antes de volver a intentarlo; si persiste, revisa los límites de Auth y el correo de Supabase.";
   }
   if (normalizedMessage.includes("email provider is disabled")) {
     return "Activa el proveedor Email en Supabase Auth.";
   }
   if (normalizedMessage.includes("email not confirmed")) {
-    return "Confirma tu correo con el código que enviamos antes de iniciar sesión.";
+    return "Confirma tu correo con el enlace que enviamos antes de iniciar sesión.";
   }
   if (
     normalizedMessage.includes("auth_schema_ready") ||
@@ -387,22 +368,6 @@ async function ensureAuthSchema() {
   const { data, error } = await supabase.rpc("auth_schema_ready");
   if (error) throw error;
   if (data !== true) throw new Error("SUPABASE_SCHEMA_NOT_READY");
-}
-function setEmailVerificationMode(enabled) {
-  customerNameField.hidden = enabled || authMode !== "register";
-  customerSurnameField.hidden = enabled || authMode !== "register";
-  customerEmailField.hidden = enabled;
-  customerPhoneField.hidden = enabled;
-  customerPasswordField.hidden = enabled;
-  customerAuthTabs.hidden = enabled;
-  customerOtpField.hidden = !enabled;
-  customerOtp.required = enabled;
-  resendOtpButton.hidden = !enabled;
-  customerSubmit.textContent = enabled
-    ? "Verificar correo"
-    : authMode === "register"
-      ? "Crear cuenta →"
-      : "Entrar →";
 }
 async function loadCustomerProfile(userId) {
   const { data, error } = await supabase
@@ -498,14 +463,12 @@ async function restoreCustomerSession() {
   }
   const sessionId = sessionStorage.getItem(activeSessionStorageKey);
   if (!sessionId) {
-    await supabase.auth.signOut();
-    openCustomerLogin();
+    await claimCustomerSession(data.session);
     return;
   }
   await setCustomerSession(data.session, sessionId);
 }
 function setAuthMode(mode) {
-  if (pendingEmailVerification) return;
   authMode = mode;
   const register = mode === "register";
   document.querySelector("#login-tab").classList.toggle("active", !register);
@@ -521,12 +484,9 @@ function setAuthMode(mode) {
   customerPhone.required = register;
   customerSubmit.textContent = register ? "Crear cuenta →" : "Entrar →";
   customerPassword.autocomplete = register ? "new-password" : "current-password";
-  setEmailVerificationMode(false);
 }
 function openCustomerLogin() {
-  pendingEmailVerification = null;
   setAuthMode("login");
-  customerOtp.value = "";
   customerModal.classList.add("open");
   document.querySelector("#customer-overlay").classList.add("visible");
   customerPhone.value = "";
@@ -575,31 +535,11 @@ document.querySelector("#register-tab").addEventListener("click", () => setAuthM
 document.querySelector("#customer-overlay").addEventListener("click", () => {
   if (customerSession) closeCustomerLogin();
 });
-resendOtpButton.addEventListener("click", async () => {
-  if (!pendingEmailVerification) return;
-  const { error } = await supabase.auth.resend({
-    type: "signup",
-    email: pendingEmailVerification,
-  });
-  showToast(error ? customerAuthError(error) : "Te enviamos otro código por correo.");
-});
 customerLoginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   customerSubmit.disabled = true;
   try {
     await ensureAuthSchema();
-    if (pendingEmailVerification) {
-      const { data, error } = await supabase.auth.verifyOtp({
-        email: pendingEmailVerification,
-        token: customerOtp.value.trim(),
-        type: "signup",
-      });
-      if (error) throw error;
-      pendingEmailVerification = null;
-      setEmailVerificationMode(false);
-      await claimAndRenderSession(data.session);
-      return;
-    }
     const email = emailForSupabase(customerEmail.value);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       showToast("Escribe un correo electrónico válido.");
@@ -616,15 +556,15 @@ customerLoginForm.addEventListener("submit", async (event) => {
       const { data, error } = await supabase.auth.signUp({
         email,
         password: customerPassword.value,
-        options: { data: { first_name: firstName, last_name: lastName, phone } },
+        options: {
+          emailRedirectTo: new URL(import.meta.env.BASE_URL, window.location.origin).toString(),
+          data: { first_name: firstName, last_name: lastName, phone },
+        },
       });
       if (error) throw error;
       if (!data.session) {
-        pendingEmailVerification = email;
-        customerOtp.value = "";
-        setEmailVerificationMode(true);
-        customerOtp.focus();
-        showToast("Te enviamos un código de verificación por correo.");
+        closeCustomerLogin();
+        showToast("Te enviamos un enlace de confirmación. Ábrelo para activar tu cuenta.");
         return;
       }
       await claimAndRenderSession(data.session);
