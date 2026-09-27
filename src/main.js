@@ -354,10 +354,10 @@ function customerAuthError(error) {
     normalizedMessage.includes("profiles") ||
     normalizedMessage.includes("schema cache")
   ) {
-    return "Falta ejecutar supabase/schema.sql en el SQL Editor de Supabase.";
+    return "Vuelve a ejecutar el supabase/schema.sql más reciente en el SQL Editor de Supabase.";
   }
   if (normalizedMessage.includes("database error saving new user")) {
-    return "No se pudo crear la cuenta. El nombre completo puede estar ocupado.";
+    return "No se pudo guardar el perfil. Actualiza el trigger ejecutando el SQL más reciente; si ya lo hiciste, prueba otro nombre o teléfono.";
   }
   if (normalizedMessage.includes("user already registered")) {
     return "Ese correo ya tiene una cuenta.";

@@ -43,7 +43,13 @@ security definer
 set search_path = ''
 as $$
   select to_regclass('public.profiles') is not null
-    and to_regclass('public.active_sessions') is not null;
+    and to_regclass('public.active_sessions') is not null
+    and to_regprocedure('public.create_profile_for_auth_user()') is not null
+    and position(
+      'raw_user_meta_data' in pg_get_functiondef(
+        to_regprocedure('public.create_profile_for_auth_user()')
+      )
+    ) > 0;
 $$;
 
 drop trigger if exists on_auth_user_created_profile on auth.users;
