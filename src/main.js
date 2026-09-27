@@ -84,7 +84,28 @@ let favorites = new Set(
 let reviews = JSON.parse(localStorage.getItem("creativa-reviews") || "{}");
 let discount = 0;
 let adminLoggedIn = sessionStorage.getItem("creativa-admin") === "true";
+const activeCustomerSessionKey = "creativa-active-customer-session";
 const app = document.querySelector("#app");
+
+function getActiveCustomerSession() {
+  try {
+    return JSON.parse(localStorage.getItem(activeCustomerSessionKey) || "null");
+  } catch {
+    return null;
+  }
+}
+
+function hasActiveCustomerSession() {
+  const phone = sessionStorage.getItem("creativa-customer-phone");
+  const sessionId = sessionStorage.getItem("creativa-customer-session-id");
+  const activeSession = getActiveCustomerSession();
+  return Boolean(phone && sessionId && activeSession?.phone === phone && activeSession?.id === sessionId);
+}
+
+function clearCustomerSession() {
+  sessionStorage.removeItem("creativa-customer-phone");
+  sessionStorage.removeItem("creativa-customer-session-id");
+}
 
 function getProductRating(product) {
   const productReviews = reviews[product.id] || [];
@@ -282,12 +303,22 @@ function closeCustomerLogin() {
   customerModal.classList.remove("open");
   document.querySelector("#customer-overlay").classList.remove("visible");
 }
-if (!sessionStorage.getItem("creativa-customer-phone")) openCustomerLogin();
+if (sessionStorage.getItem("creativa-customer-phone") && !hasActiveCustomerSession()) {
+  clearCustomerSession();
+}
+if (!hasActiveCustomerSession()) openCustomerLogin();
 document.querySelector("#account-toggle").addEventListener("click", openCustomerLogin);
 document.querySelector("#login-tab").addEventListener("click", () => setAuthMode("login"));
 document.querySelector("#register-tab").addEventListener("click", () => setAuthMode("register"));
 document.querySelector("#customer-overlay").addEventListener("click", () => {
   if (sessionStorage.getItem("creativa-customer-phone")) closeCustomerLogin();
+});
+window.addEventListener("storage", (event) => {
+  if (event.key !== activeCustomerSessionKey) return;
+  if (!sessionStorage.getItem("creativa-customer-phone") || hasActiveCustomerSession()) return;
+  clearCustomerSession();
+  openCustomerLogin();
+  showToast("Tu sesión se cerró porque iniciaste sesión en otra pestaña.");
 });
 document.querySelector("#customer-login-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -309,7 +340,10 @@ document.querySelector("#customer-login-form").addEventListener("submit", (event
     showToast("Teléfono o contraseña incorrectos.");
     return;
   }
+  const sessionId = crypto.randomUUID();
   sessionStorage.setItem("creativa-customer-phone", phone);
+  sessionStorage.setItem("creativa-customer-session-id", sessionId);
+  localStorage.setItem(activeCustomerSessionKey, JSON.stringify({ phone, id: sessionId }));
   closeCustomerLogin();
   showToast("Sesión iniciada correctamente.");
 });
