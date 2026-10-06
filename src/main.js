@@ -268,6 +268,7 @@ document.body.insertAdjacentHTML(
 const customerModal = document.querySelector("#customer-modal");
 const customerPhone = document.querySelector("#customer-phone");
 const customerName = document.querySelector("#customer-name");
+const customerPassword = document.querySelector("#customer-password");
 const customerNameField = document.querySelector("#customer-name-field");
 const customerSurnameField = document.createElement("label");
 customerSurnameField.id = "customer-surname-field";
@@ -298,9 +299,27 @@ customerEmail.required = true;
 customerEmail.placeholder = "tu@correo.com";
 customerEmailField.append(customerEmail);
 customerPhoneField.before(customerEmailField);
-customerPhoneField.closest("form").querySelector('#customer-password').closest("label").remove();
+const customerPasswordField = customerPassword.closest("label");
+const customerPasswordConfirmationField = document.createElement("label");
+customerPasswordConfirmationField.hidden = true;
+customerPasswordConfirmationField.textContent = "Confirmar contraseña";
+const customerPasswordConfirmation = document.createElement("input");
+customerPasswordConfirmation.id = "customer-password-confirmation";
+customerPasswordConfirmation.type = "password";
+customerPasswordConfirmation.autocomplete = "new-password";
+customerPasswordConfirmation.placeholder = "Repite tu contraseña";
+customerPasswordConfirmationField.append(customerPasswordConfirmation);
+customerPasswordField.after(customerPasswordConfirmationField);
+const forgotPasswordButton = document.createElement("button");
+forgotPasswordButton.id = "forgot-password-button";
+forgotPasswordButton.className = "forgot-password-button";
+forgotPasswordButton.type = "button";
+forgotPasswordButton.textContent = "Olvidé mi contraseña";
+forgotPasswordButton.hidden = true;
+customerLoginForm.insertBefore(forgotPasswordButton, customerSubmit);
 const customerAuthTabs = document.querySelector(".auth-tabs");
 let authMode = "login";
+let passwordRecoveryMode = false;
 function renderAccountName() {
   const name = getCustomerDisplayName(customerProfile);
   const nameElement = document.querySelector("#account-user-name");
@@ -456,6 +475,7 @@ async function expireCustomerSession() {
 async function restoreCustomerSession() {
   const { data, error } = await supabase.auth.getSession();
   if (error) throw error;
+  if (passwordRecoveryMode) return;
   if (!data.session) {
     try {
       await ensureAuthSchema();
@@ -477,22 +497,50 @@ async function restoreCustomerSession() {
 function setAuthMode(mode) {
   authMode = mode;
   const register = mode === "register";
+  const forgot = mode === "forgot";
+  const recovery = mode === "recovery";
+  const login = mode === "login";
   document.querySelector("#login-tab").classList.toggle("active", !register);
   document.querySelector("#register-tab").classList.toggle("active", register);
-  document.querySelector("#customer-title").textContent = register ? "Crea tu cuenta" : "Inicia sesión";
+  customerAuthTabs.hidden = forgot || recovery;
+  document.querySelector("#customer-title").textContent = register
+    ? "Crea tu cuenta"
+    : forgot
+      ? "Recuperar contraseña"
+      : recovery
+        ? "Elige una contraseña nueva"
+        : "Inicia sesión";
   customerNameField.hidden = !register;
   customerSurnameField.hidden = !register;
-  customerEmailField.hidden = false;
+  customerEmailField.hidden = recovery;
   customerPhoneField.hidden = !register;
+  customerPasswordField.hidden = forgot;
+  customerPasswordConfirmationField.hidden = !register && !recovery;
+  customerPassword.required = !forgot;
+  customerPasswordConfirmation.required = register || recovery;
   customerName.required = register;
   customerSurname.required = register;
   customerPhone.required = false;
   document.querySelector("#customer-description").textContent = register
-    ? "Crea tu perfil y confirma tu correo con el enlace que te enviaremos."
-    : "Te enviaremos un enlace seguro para iniciar sesión.";
-  customerSubmit.textContent = register ? "Crear cuenta →" : "Enviar enlace →";
+    ? "Crea tu perfil y confirma tu correo."
+    : forgot
+      ? "Te enviaremos un enlace para restablecerla."
+      : recovery
+        ? "Usa una contraseña nueva para tu cuenta."
+        : "Inicia sesión con tu correo y contraseña.";
+  customerPasswordField.firstChild.textContent = recovery ? "Nueva contraseña" : "Contraseña";
+  customerSubmit.textContent = register
+    ? "Crear cuenta →"
+    : forgot
+      ? "Enviar enlace →"
+      : recovery
+        ? "Guardar contraseña →"
+        : "Entrar →";
+  forgotPasswordButton.hidden = !login;
+  customerPassword.autocomplete = register || recovery ? "new-password" : "current-password";
 }
 function openCustomerLogin() {
+  passwordRecoveryMode = false;
   setAuthMode("login");
   customerModal.classList.add("open");
   document.querySelector("#customer-overlay").classList.add("visible");
@@ -500,12 +548,29 @@ function openCustomerLogin() {
   customerEmail.value = "";
   customerName.value = "";
   customerSurname.value = "";
+  customerPassword.value = "";
+  customerPasswordConfirmation.value = "";
   customerEmail.focus();
 }
 function closeCustomerLogin() {
   customerModal.classList.remove("open");
   document.querySelector("#customer-overlay").classList.remove("visible");
 }
+supabase.auth.onAuthStateChange((event, session) => {
+  if (event !== "PASSWORD_RECOVERY" || !session) return;
+  passwordRecoveryMode = true;
+  stopSessionMonitor();
+  customerSession = null;
+  customerProfile = null;
+  activeSessionId = null;
+  sessionStorage.removeItem(activeSessionStorageKey);
+  setAuthMode("recovery");
+  customerModal.classList.add("open");
+  document.querySelector("#customer-overlay").classList.add("visible");
+  customerPassword.value = "";
+  customerPasswordConfirmation.value = "";
+  customerPassword.focus();
+});
 async function claimAndRenderSession(session) {
   await claimCustomerSession(session);
   showToast("Sesión iniciada correctamente.");
@@ -538,6 +603,7 @@ document.querySelector("#customer-logout").addEventListener("click", async () =>
 });
 document.querySelector("#login-tab").addEventListener("click", () => setAuthMode("login"));
 document.querySelector("#register-tab").addEventListener("click", () => setAuthMode("register"));
+forgotPasswordButton.addEventListener("click", () => setAuthMode("forgot"));
 document.querySelector("#customer-overlay").addEventListener("click", () => {
   if (customerSession) closeCustomerLogin();
 });
@@ -545,25 +611,58 @@ customerLoginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   customerSubmit.disabled = true;
   try {
-    await ensureAuthSchema();
     const email = emailForSupabase(customerEmail.value);
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (authMode !== "recovery" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       showToast("Escribe un correo electrónico válido.");
       return;
     }
+    if (authMode === "forgot") {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: new URL(import.meta.env.BASE_URL, window.location.origin).toString(),
+      });
+      if (error) throw error;
+      closeCustomerLogin();
+      showToast("Te enviamos un enlace para restablecer la contraseña.");
+      return;
+    }
+    if (authMode === "recovery") {
+      if (customerPassword.value.length < 6) {
+        showToast("La contraseña debe tener al menos 6 caracteres.");
+        return;
+      }
+      if (customerPassword.value !== customerPasswordConfirmation.value) {
+        showToast("Las contraseñas no coinciden.");
+        return;
+      }
+      const { error } = await supabase.auth.updateUser({ password: customerPassword.value });
+      if (error) throw error;
+      passwordRecoveryMode = false;
+      await ensureAuthSchema();
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError) throw sessionError;
+      if (!data.session) throw new Error("No se pudo recuperar la sesión. Vuelve a abrir el enlace.");
+      await claimAndRenderSession(data.session);
+      showToast("Contraseña actualizada correctamente.");
+      return;
+    }
+    await ensureAuthSchema();
     if (authMode === "register") {
       const firstName = customerName.value.trim().replace(/\s+/g, " ");
       const lastName = customerSurname.value.trim().replace(/\s+/g, " ");
+      if (customerPassword.value.length < 6) {
+        showToast("La contraseña debe tener al menos 6 caracteres.");
+        return;
+      }
       const phoneInput = customerPhone.value.trim();
       const phone = phoneInput ? phoneForSupabase(phoneInput) : null;
       if (phoneInput && !phone) {
         showToast("Escribe un número de México con 10 dígitos o en formato +E.164.");
         return;
       }
-      const { data, error } = await supabase.auth.signInWithOtp({
+      const { data, error } = await supabase.auth.signUp({
         email,
+        password: customerPassword.value,
         options: {
-          shouldCreateUser: true,
           emailRedirectTo: new URL(import.meta.env.BASE_URL, window.location.origin).toString(),
           data: { first_name: firstName, last_name: lastName, phone },
         },
@@ -576,23 +675,15 @@ customerLoginForm.addEventListener("submit", async (event) => {
       }
       await claimAndRenderSession(data.session);
     } else {
-      const { data, error } = await supabase.auth.signInWithOtp({
+      const { data, error } = await supabase.auth.signInWithPassword({
         email,
-        options: {
-          shouldCreateUser: false,
-          emailRedirectTo: new URL(import.meta.env.BASE_URL, window.location.origin).toString(),
-        },
+        password: customerPassword.value,
       });
       if (error) throw error;
-      if (!data.session) {
-        closeCustomerLogin();
-        showToast("Te enviamos un enlace de acceso a tu correo.");
-        return;
-      }
       await claimAndRenderSession(data.session);
     }
   } catch (error) {
-    await supabase.auth.signOut();
+    if (authMode !== "recovery") await supabase.auth.signOut();
     showToast(customerAuthError(error));
   } finally {
     customerSubmit.disabled = false;
