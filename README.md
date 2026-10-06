@@ -8,6 +8,6 @@
 4. Run `supabase/schema.sql` in the SQL Editor to install/update the profile trigger that stores the contact phone from signup metadata.
 5. `src/supabase.js` contains the project URL and publishable key. The publishable key is intended for browser use; never put a `service_role` key in the frontend.
 
-Profiles and active customer sessions are stored in Supabase. Full names and provided contact phone numbers are unique; phone is optional. A new login replaces the previous active session for that account. The previous device checks for replacement every 10 seconds. Customers sign in with email; the phone number is profile data only.
+Profiles and active customer sessions are stored in Supabase. Full names and provided contact phone numbers are unique; phone is optional. Customers register and sign in without passwords using one-time email links. Each confirmed link establishes the account's only active session; an existing device checks for replacement every 10 seconds. The phone number is profile data only.
 
 Accounts that existed only in browser storage are not migrated. Customers need to register again after Supabase is configured. Product data, cart, favorites, and reviews are still stored locally.

@@ -267,7 +267,6 @@ document.body.insertAdjacentHTML(
 );
 const customerModal = document.querySelector("#customer-modal");
 const customerPhone = document.querySelector("#customer-phone");
-const customerPassword = document.querySelector("#customer-password");
 const customerName = document.querySelector("#customer-name");
 const customerNameField = document.querySelector("#customer-name-field");
 const customerSurnameField = document.createElement("label");
@@ -299,7 +298,7 @@ customerEmail.required = true;
 customerEmail.placeholder = "tu@correo.com";
 customerEmailField.append(customerEmail);
 customerPhoneField.before(customerEmailField);
-const customerPasswordField = customerPassword.closest("label");
+customerPhoneField.closest("form").querySelector('#customer-password').closest("label").remove();
 const customerAuthTabs = document.querySelector(".auth-tabs");
 let authMode = "login";
 function renderAccountName() {
@@ -346,7 +345,7 @@ function customerAuthError(error) {
     normalizedMessage.includes("rate limit") ||
     normalizedMessage.includes("security purposes")
   ) {
-    return "Se alcanzó el límite temporal de correos. Espera antes de volver a intentarlo; si persiste, revisa los límites de Auth y el correo de Supabase.";
+    return "Se alcanzó el límite temporal de enlaces de acceso. Espera antes de volver a intentarlo; si persiste, revisa los límites de Auth y el correo de Supabase.";
   }
   if (normalizedMessage.includes("email provider is disabled")) {
     return "Activa el proveedor Email en Supabase Auth.";
@@ -481,7 +480,6 @@ function setAuthMode(mode) {
   document.querySelector("#login-tab").classList.toggle("active", !register);
   document.querySelector("#register-tab").classList.toggle("active", register);
   document.querySelector("#customer-title").textContent = register ? "Crea tu cuenta" : "Inicia sesión";
-  document.querySelector("#customer-description").textContent = register ? "Regístrate para guardar tus favoritos y pedidos." : "Entra para guardar tus favoritos y pedidos.";
   customerNameField.hidden = !register;
   customerSurnameField.hidden = !register;
   customerEmailField.hidden = false;
@@ -489,8 +487,10 @@ function setAuthMode(mode) {
   customerName.required = register;
   customerSurname.required = register;
   customerPhone.required = false;
-  customerSubmit.textContent = register ? "Crear cuenta →" : "Entrar →";
-  customerPassword.autocomplete = register ? "new-password" : "current-password";
+  document.querySelector("#customer-description").textContent = register
+    ? "Crea tu perfil y confirma tu correo con el enlace que te enviaremos."
+    : "Te enviaremos un enlace seguro para iniciar sesión.";
+  customerSubmit.textContent = register ? "Crear cuenta →" : "Enviar enlace →";
 }
 function openCustomerLogin() {
   setAuthMode("login");
@@ -498,7 +498,6 @@ function openCustomerLogin() {
   document.querySelector("#customer-overlay").classList.add("visible");
   customerPhone.value = "";
   customerEmail.value = "";
-  customerPassword.value = "";
   customerName.value = "";
   customerSurname.value = "";
   customerEmail.focus();
@@ -561,10 +560,10 @@ customerLoginForm.addEventListener("submit", async (event) => {
         showToast("Escribe un número de México con 10 dígitos o en formato +E.164.");
         return;
       }
-      const { data, error } = await supabase.auth.signUp({
+      const { data, error } = await supabase.auth.signInWithOtp({
         email,
-        password: customerPassword.value,
         options: {
+          shouldCreateUser: true,
           emailRedirectTo: new URL(import.meta.env.BASE_URL, window.location.origin).toString(),
           data: { first_name: firstName, last_name: lastName, phone },
         },
@@ -577,11 +576,19 @@ customerLoginForm.addEventListener("submit", async (event) => {
       }
       await claimAndRenderSession(data.session);
     } else {
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const { data, error } = await supabase.auth.signInWithOtp({
         email,
-        password: customerPassword.value,
+        options: {
+          shouldCreateUser: false,
+          emailRedirectTo: new URL(import.meta.env.BASE_URL, window.location.origin).toString(),
+        },
       });
       if (error) throw error;
+      if (!data.session) {
+        closeCustomerLogin();
+        showToast("Te enviamos un enlace de acceso a tu correo.");
+        return;
+      }
       await claimAndRenderSession(data.session);
     }
   } catch (error) {
