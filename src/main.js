@@ -488,7 +488,7 @@ function setAuthMode(mode) {
   customerPhoneField.hidden = !register;
   customerName.required = register;
   customerSurname.required = register;
-  customerPhone.required = register;
+  customerPhone.required = false;
   customerSubmit.textContent = register ? "Crear cuenta →" : "Entrar →";
   customerPassword.autocomplete = register ? "new-password" : "current-password";
 }
@@ -555,8 +555,9 @@ customerLoginForm.addEventListener("submit", async (event) => {
     if (authMode === "register") {
       const firstName = customerName.value.trim().replace(/\s+/g, " ");
       const lastName = customerSurname.value.trim().replace(/\s+/g, " ");
-      const phone = phoneForSupabase(customerPhone.value);
-      if (!phone) {
+      const phoneInput = customerPhone.value.trim();
+      const phone = phoneInput ? phoneForSupabase(phoneInput) : null;
+      if (phoneInput && !phone) {
         showToast("Escribe un número de México con 10 dígitos o en formato +E.164.");
         return;
       }

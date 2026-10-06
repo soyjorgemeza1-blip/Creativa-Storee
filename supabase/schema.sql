@@ -1,6 +1,6 @@
 create table if not exists public.profiles (
   id uuid primary key references auth.users (id) on delete cascade,
-  phone text not null unique,
+  phone text unique,
   first_name text not null check (length(btrim(first_name)) > 0),
   last_name text not null check (length(btrim(last_name)) > 0),
   full_name text generated always as (
@@ -8,6 +8,8 @@ create table if not exists public.profiles (
   ) stored,
   created_at timestamptz not null default now()
 );
+
+alter table public.profiles alter column phone drop not null;
 
 create unique index if not exists profiles_full_name_unique
   on public.profiles (lower(full_name));
@@ -44,6 +46,14 @@ set search_path = ''
 as $$
   select to_regclass('public.profiles') is not null
     and to_regclass('public.active_sessions') is not null
+    and exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'profiles'
+        and column_name = 'phone'
+        and is_nullable = 'YES'
+    )
     and to_regprocedure('public.create_profile_for_auth_user()') is not null
     and position(
       'raw_user_meta_data' in pg_get_functiondef(
