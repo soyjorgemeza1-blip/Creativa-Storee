@@ -324,6 +324,13 @@ function emailForSupabase(value) {
 function customerAuthError(error) {
   const message = String(error?.message || "");
   const normalizedMessage = message.toLowerCase();
+  if (
+    normalizedMessage.includes("failed to fetch") ||
+    normalizedMessage.includes("err_name_not_resolved") ||
+    normalizedMessage.includes("networkerror")
+  ) {
+    return "No se puede conectar con Supabase. Revisa que la Project URL en src/supabase.js sea la URL actual de tu proyecto.";
+  }
   if (normalizedMessage.includes("profiles_phone_key")) {
     return "Ese teléfono ya está asociado a otra cuenta.";
   }
